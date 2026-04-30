@@ -8,35 +8,48 @@ All colors MUST be HSL.
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 210 35% 97%;
+    --foreground: 213 58% 13%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 213 58% 13%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover-foreground: 213 58% 13%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    --primary: 209 100% 23%;
+    --primary-foreground: 0 0% 100%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 203 78% 41%;
+    --secondary-foreground: 0 0% 100%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 210 28% 92%;
+    --muted-foreground: 216 8% 47%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --accent: 6 86% 59%;
+    --accent-foreground: 0 0% 100%;
 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 355 78% 56%;
+    --destructive-foreground: 0 0% 100%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --border: 212 25% 86%;
+    --input: 212 25% 86%;
+    --ring: 203 78% 41%;
 
-    --radius: 0.5rem;
+    --navy: 209 100% 16%;
+    --navy-foreground: 0 0% 100%;
+    --surface: 210 35% 97%;
+    --surface-strong: 211 43% 91%;
+    --success: 158 61% 38%;
+    --warning: 38 92% 50%;
+    --ready: 199 89% 39%;
+    --submitted: 246 51% 57%;
+    --gradient-brand: linear-gradient(135deg, hsl(209 100% 23%), hsl(203 78% 41%));
+    --gradient-hot: linear-gradient(135deg, hsl(355 78% 56%), hsl(6 86% 59%));
+    --shadow-card: 0 18px 50px -28px hsl(209 100% 16% / 0.45);
+    --shadow-a4: 0 30px 80px -35px hsl(209 100% 16% / 0.55);
+
+    --radius: 0.75rem;
 
     --sidebar-background: 0 0% 98%;
 
@@ -100,6 +113,49 @@ All colors MUST be HSL.
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+@layer components {
+  .studio-card {
+    @apply rounded-xl border border-border bg-card text-card-foreground shadow-card;
+  }
+
+  .a4-page {
+    width: min(100%, 794px);
+    min-height: 1123px;
+    aspect-ratio: 1 / 1.414;
+    @apply relative bg-card text-foreground shadow-a4;
+  }
+
+  .editable-field {
+    @apply rounded-sm outline-none transition-colors hover:bg-secondary/10 focus:bg-secondary/10 focus:ring-2 focus:ring-ring;
+  }
+}
+
+@media print {
+  body {
+    background: hsl(0 0% 100%) !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-area {
+    display: block !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: hsl(0 0% 100%) !important;
+  }
+
+  .a4-page {
+    width: 210mm !important;
+    min-height: 297mm !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+    break-after: avoid;
   }
 }
