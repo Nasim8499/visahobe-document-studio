@@ -824,8 +824,8 @@ function DocumentStudio({ doc, clients, role, userName, onSave, onDuplicate, onR
       <div className="print-area overflow-auto rounded-xl bg-surface-strong p-3 sm:p-6">
         <A4Preview doc={doc} client={selectedClient} onField={(k, v) => setField(k, v)} onTransactions={(rows) => setTransactions(rows)} onPlans={setPlans} />
       </div>
-      <ImportTransactionsDialog open={importOpen} onOpenChange={setImportOpen} openingBalance={Number(doc.fields.openingBalance) || 0} onImport={(rows) => setTransactions(rows, `Imported ${rows.length} transactions`)} />
-      <ExportDialog open={exportOpen} onOpenChange={setExportOpen} />
+      <ImportTransactionsDialog open={importOpen} onOpenChange={setImportOpen} openingBalance={Number(doc.fields.openingBalance) || 0} onImport={(rows) => { setTransactions(rows, `Imported ${rows.length} transactions`); onLog(`${userName} (${role}) imported ${rows.length} transactions into "${doc.title}"`, "import"); }} />
+      <ExportDialog open={exportOpen} onOpenChange={setExportOpen} onConfirm={(mode) => onLog(`${userName} (${role}) ${mode === "pdf" ? "exported PDF" : "printed"} "${doc.title}"`, "export")} />
     </section>
   );
 }
