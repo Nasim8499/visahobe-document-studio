@@ -705,7 +705,7 @@ function GlobalSearchDialog({ open, onOpenChange, clients, documents, onPickDoc,
   );
 }
 
-function DocumentStudio({ doc, clients, role, userName, onSave, onDuplicate, onReset }: { doc: DocumentDraft; clients: Client[]; role: Role; userName: string; onSave: (doc: DocumentDraft, message?: string) => void; onDuplicate: (doc: DocumentDraft) => void; onReset: () => void }) {
+function DocumentStudio({ doc, clients, role, userName, onSave, onDuplicate, onReset, onLog }: { doc: DocumentDraft; clients: Client[]; role: Role; userName: string; onSave: (doc: DocumentDraft, message?: string) => void; onDuplicate: (doc: DocumentDraft) => void; onReset: () => void; onLog: (text: string, icon: ActivityLog["icon"]) => void }) {
   const selectedClient = clients.find((c) => c.id === doc.clientId) || clients[0];
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
