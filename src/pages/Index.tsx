@@ -475,13 +475,41 @@ function LetterBlock({ title, children }: { title: string; children: React.React
   return <div className="space-y-5"><h3 className="text-lg font-bold text-navy">{title}</h3><div className="space-y-4 text-sm">{children}</div><div className="pt-8"><p className="font-semibold">Authorized signature</p><div className="mt-8 w-56 border-t border-foreground" /></div></div>;
 }
 
-function ImportTransactionsDialog({ open, onOpenChange, onImport }: { open: boolean; onOpenChange: (o: boolean) => void; onImport: (rows: TransactionRow[]) => void }) {
+type ImportValidation = { rowIndex: number; field: string; message: string };
+
+function validateTransactions(rows: TransactionRow[], openingBalance: number): { errors: ImportValidation[]; computed: { totalDebit: number; totalCredit: number } } {
+  const errors: ImportValidation[] = [];
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  let running = openingBalance;
+  let totalDebit = 0;
+  let totalCredit = 0;
+  rows.forEach((r, i) => {
+    if (!r.date || !dateRe.test(r.date)) errors.push({ rowIndex: i, field: "date", message: "Date must be YYYY-MM-DD" });
+    if (!r.description?.trim()) errors.push({ rowIndex: i, field: "description", message: "Description is required" });
+    if (Number.isNaN(Number(r.debit)) || Number(r.debit) < 0) errors.push({ rowIndex: i, field: "debit", message: "Debit must be ≥ 0" });
+    if (Number.isNaN(Number(r.credit)) || Number(r.credit) < 0) errors.push({ rowIndex: i, field: "credit", message: "Credit must be ≥ 0" });
+    if (Number(r.debit) > 0 && Number(r.credit) > 0) errors.push({ rowIndex: i, field: "credit", message: "Row cannot have both debit and credit" });
+    totalDebit += Number(r.debit || 0);
+    totalCredit += Number(r.credit || 0);
+    running = running + Number(r.credit || 0) - Number(r.debit || 0);
+    if (r.balance !== undefined && r.balance !== null && !Number.isNaN(Number(r.balance))) {
+      if (Math.abs(Number(r.balance) - running) > 0.01) {
+        errors.push({ rowIndex: i, field: "balance", message: `Running balance mismatch (expected ${running.toFixed(2)})` });
+      }
+    }
+  });
+  return { errors, computed: { totalDebit, totalCredit } };
+}
+
+function ImportTransactionsDialog({ open, onOpenChange, openingBalance, onImport }: { open: boolean; onOpenChange: (o: boolean) => void; openingBalance: number; onImport: (rows: TransactionRow[]) => void }) {
   const [rawRows, setRawRows] = useState<Record<string, string>[]>([]);
   const [headers, setHeaders] = useState<string[]>([]);
   const [map, setMap] = useState<{ date: string; description: string; debit: string; credit: string; reference: string; balance: string }>({ date: "", description: "", debit: "", credit: "", reference: "", balance: "" });
+  const [errors, setErrors] = useState<ImportValidation[]>([]);
+  const [preview, setPreview] = useState<TransactionRow[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const reset = () => { setRawRows([]); setHeaders([]); setMap({ date: "", description: "", debit: "", credit: "", reference: "", balance: "" }); };
+  const reset = () => { setRawRows([]); setHeaders([]); setErrors([]); setPreview([]); setMap({ date: "", description: "", debit: "", credit: "", reference: "", balance: "" }); };
 
   const handleFile = async (file: File) => {
     try {
@@ -508,28 +536,42 @@ function ImportTransactionsDialog({ open, onOpenChange, onImport }: { open: bool
     }
   };
 
-  const handleImport = () => {
-    if (!map.date || !map.description) { toast.error("Map at least Date and Description columns"); return; }
+  const buildRows = (): TransactionRow[] => {
     const num = (v: string) => Number((v || "").toString().replace(/[, ]/g, "")) || 0;
-    let running = 0;
-    const balanceProvided = Boolean(map.balance);
-    const rows: TransactionRow[] = rawRows.map((r) => {
+    return rawRows.map((r) => {
       const debit = num(r[map.debit] || "");
       const credit = num(r[map.credit] || "");
-      const balance = balanceProvided ? num(r[map.balance] || "") : (running = running + credit - debit);
-      return { id: uid(), date: String(r[map.date] || "").slice(0, 10), description: String(r[map.description] || ""), reference: String(r[map.reference] || ""), debit, credit, balance };
+      const balance = map.balance ? num(r[map.balance] || "") : NaN;
+      const rawDate = String(r[map.date] || "").trim();
+      const isoMatch = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      const dmYMatch = rawDate.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+      const date = isoMatch ? `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}` : dmYMatch ? `${dmYMatch[3]}-${dmYMatch[2].padStart(2, "0")}-${dmYMatch[1].padStart(2, "0")}` : rawDate.slice(0, 10);
+      return { id: uid(), date, description: String(r[map.description] || ""), reference: String(r[map.reference] || ""), debit, credit, balance: Number.isNaN(balance) ? 0 : balance };
     });
-    onImport(rows);
+  };
+
+  const validate = () => {
+    if (!map.date || !map.description) { toast.error("Map at least Date and Description columns"); return; }
+    const rows = buildRows();
+    const { errors: errs } = validateTransactions(rows, Number(openingBalance) || 0);
+    setPreview(rows); setErrors(errs);
+    if (errs.length) toast.error(`${errs.length} validation issue(s) found`); else toast.success("Validation passed — ready to import");
+  };
+
+  const handleImport = () => {
+    if (!preview.length) { validate(); return; }
+    if (errors.length) { toast.error("Fix validation errors before importing"); return; }
+    onImport(preview);
     onOpenChange(false);
     reset();
   };
 
   return (
     <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) reset(); }}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Import transactions (CSV / XLSX)</DialogTitle>
-          <DialogDescription>Upload a bank export, then map columns to Date, Description, Debit, and Credit.</DialogDescription>
+          <DialogDescription>Upload a bank export, then map columns. Validation runs before saving.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <div className="rounded-xl border border-dashed border-border p-4 text-center">
@@ -553,11 +595,21 @@ function ImportTransactionsDialog({ open, onOpenChange, onImport }: { open: bool
               ))}
             </div>
           )}
-          {rawRows.length > 0 && <p className="text-xs text-muted-foreground">{rawRows.length} rows ready for import.</p>}
+          {rawRows.length > 0 && <div className="flex items-center justify-between text-xs text-muted-foreground"><span>{rawRows.length} rows ready.</span><Button size="sm" variant="outline" onClick={validate}>Validate rows</Button></div>}
+          {errors.length > 0 && (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+              <p className="mb-2 text-xs font-semibold text-destructive">{errors.length} validation issue(s):</p>
+              <ul className="max-h-40 space-y-1 overflow-auto text-xs text-destructive">
+                {errors.slice(0, 25).map((e, i) => <li key={i}>Row {e.rowIndex + 1} • <b>{e.field}</b>: {e.message}</li>)}
+                {errors.length > 25 && <li>…and {errors.length - 25} more</li>}
+              </ul>
+            </div>
+          )}
+          {preview.length > 0 && !errors.length && <p className="rounded-lg border border-success/30 bg-success/5 p-2 text-xs text-success">All {preview.length} rows passed validation.</p>}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button variant="hero" disabled={!rawRows.length} onClick={handleImport}>Import {rawRows.length || ""} rows</Button>
+          <Button variant="hero" disabled={!rawRows.length || (preview.length > 0 && errors.length > 0)} onClick={handleImport}>{preview.length ? "Import" : "Validate & continue"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
