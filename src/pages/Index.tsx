@@ -87,7 +87,7 @@ type DocumentDraft = {
   dayPlans?: DayPlan[];
   reviewNotes?: ReviewNote[];
 };
-type ActivityLog = { id: string; text: string; at: string; icon: TemplateKey | "client" | "save" };
+type ActivityLog = { id: string; text: string; at: string; icon: TemplateKey | "client" | "save" | "status" | "note" | "import" | "export"; actor?: string; role?: Role };
 type Session = { name: string; role: Role } | null;
 
 type Store = {
