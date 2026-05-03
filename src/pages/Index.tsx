@@ -449,7 +449,7 @@ function A4Preview({ doc, client, onField, onTransactions, onPlans }: { doc: Doc
   const f = doc.fields;
   const currency = String(f.currency || "SGD");
   const edit = (key: string, className?: string) => <Editable value={f[key]} onChange={(v) => onField(key, v)} className={className} />;
-  const header = <><div className="flex items-start justify-between border-b border-border pb-5"><div><p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary">VisaHOBe PTE. LTD.</p><h2 className="mt-2 text-2xl font-bold text-navy">{templateMeta[doc.template].name}</h2></div><Badge className={statusClass[doc.status]} variant="outline">{doc.verified ? "Verified" : doc.status}</Badge></div>{doc.watermark && <div className="pointer-events-none absolute inset-0 flex rotate-[-28deg] items-center justify-center text-6xl font-bold uppercase tracking-widest text-muted/80">Sample / Draft</div>}</>;
+  const header = <><div className="flex items-start justify-between border-b border-border pb-5"><div><p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary">VisaHOBe PTE. LTD.</p><h2 className="mt-2 text-2xl font-bold text-navy">{templateMeta[doc.template].name}</h2></div><Badge className={statusClass[doc.status]} variant="outline">{doc.verified ? "Verified" : doc.status}</Badge></div>{doc.watermark && <div aria-hidden className="pointer-events-none absolute inset-0 z-10 flex rotate-[-28deg] items-center justify-center text-7xl font-extrabold uppercase tracking-widest text-muted-foreground/15 print:text-foreground/10">SAMPLE / DRAFT</div>}</>;
   return (
     <article className="a4-page mx-auto overflow-hidden p-8 font-body text-sm leading-relaxed">
       {header}
