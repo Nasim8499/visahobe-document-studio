@@ -858,7 +858,7 @@ export default function Index() {
 
   useEffect(() => localStorage.setItem("visahobe-document-studio", JSON.stringify(store)), [store]);
 
-  const addLog = (text: string, icon: ActivityLog["icon"] = "save") => setStore((prev) => ({ ...prev, activityLogs: [{ id: uid(), text, at: new Date().toISOString(), icon }, ...prev.activityLogs].slice(0, 20) }));
+  const addLog = (text: string, icon: ActivityLog["icon"] = "save") => setStore((prev) => ({ ...prev, activityLogs: [{ id: uid(), text, at: new Date().toISOString(), icon, actor: prev.session?.name, role: prev.session?.role }, ...prev.activityLogs].slice(0, 200) }));
   const login = (session: NonNullable<Session>) => { setStore((prev) => ({ ...prev, session })); toast.success(`Welcome, ${session.role}`); };
   if (!store.session) return <LoginScreen onLogin={login} />;
 
