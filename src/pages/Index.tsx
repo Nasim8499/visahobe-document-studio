@@ -72,6 +72,7 @@ type Client = {
 
 type TransactionRow = { id: string; date: string; description: string; reference: string; debit: number; credit: number; balance: number };
 type DayPlan = { id: string; date: string; city: string; plan: string };
+type ReviewNote = { id: string; author: string; role: Role; text: string; at: string };
 type DocumentDraft = {
   id: string;
   clientId: string;
@@ -84,6 +85,7 @@ type DocumentDraft = {
   fields: Record<string, string | number | boolean>;
   transactions?: TransactionRow[];
   dayPlans?: DayPlan[];
+  reviewNotes?: ReviewNote[];
 };
 type ActivityLog = { id: string; text: string; at: string; icon: TemplateKey | "client" | "save" };
 type Session = { name: string; role: Role } | null;
