@@ -821,7 +821,7 @@ function DocumentStudio({ doc, clients, role, userName, onSave, onDuplicate, onR
       <div className="print-area overflow-auto rounded-xl bg-surface-strong p-3 sm:p-6">
         <A4Preview doc={doc} client={selectedClient} onField={(k, v) => setField(k, v)} onTransactions={(rows) => setTransactions(rows)} onPlans={setPlans} />
       </div>
-      <ImportTransactionsDialog open={importOpen} onOpenChange={setImportOpen} onImport={(rows) => setTransactions(rows, `Imported ${rows.length} transactions`)} />
+      <ImportTransactionsDialog open={importOpen} onOpenChange={setImportOpen} openingBalance={Number(doc.fields.openingBalance) || 0} onImport={(rows) => setTransactions(rows, `Imported ${rows.length} transactions`)} />
       <ExportDialog open={exportOpen} onOpenChange={setExportOpen} />
     </section>
   );
