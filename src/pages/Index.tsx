@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import {
   Activity,
   BadgeCheck,
@@ -12,6 +13,7 @@ import {
   FileText,
   Hotel,
   LayoutDashboard,
+  Lock,
   LogIn,
   LogOut,
   Mail,
@@ -23,8 +25,10 @@ import {
   RefreshCcw,
   Save,
   Search,
+  Send,
   ShieldCheck,
   Trash2,
+  Upload,
   UserRound,
   WalletCards,
 } from "lucide-react";
@@ -33,6 +37,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -42,6 +47,14 @@ import { cn } from "@/lib/utils";
 type Role = "Admin" | "Documentation Officer" | "Reviewer";
 type Status = "Draft" | "Review" | "Verified" | "Ready" | "Submitted";
 type TemplateKey = "financial" | "employment" | "salary" | "itinerary" | "accommodation" | "cover";
+
+const ROLE_PERMS: Record<Role, { verify: boolean; submit: boolean; setStatus: Status[]; manageClients: boolean }> = {
+  Admin: { verify: true, submit: true, setStatus: ["Draft", "Review", "Verified", "Ready", "Submitted"], manageClients: true },
+  "Documentation Officer": { verify: false, submit: true, setStatus: ["Draft", "Review", "Ready", "Submitted"], manageClients: true },
+  Reviewer: { verify: true, submit: false, setStatus: ["Review", "Verified", "Ready"], manageClients: false },
+};
+const can = (role: Role | undefined, action: "verify" | "submit" | "manageClients") => !!role && ROLE_PERMS[role][action];
+const STATUS_FLOW: Status[] = ["Draft", "Review", "Verified", "Ready", "Submitted"];
 
 type Client = {
   id: string;
@@ -59,6 +72,7 @@ type Client = {
 
 type TransactionRow = { id: string; date: string; description: string; reference: string; debit: number; credit: number; balance: number };
 type DayPlan = { id: string; date: string; city: string; plan: string };
+type ReviewNote = { id: string; author: string; role: Role; text: string; at: string };
 type DocumentDraft = {
   id: string;
   clientId: string;
@@ -71,6 +85,7 @@ type DocumentDraft = {
   fields: Record<string, string | number | boolean>;
   transactions?: TransactionRow[];
   dayPlans?: DayPlan[];
+  reviewNotes?: ReviewNote[];
 };
 type ActivityLog = { id: string; text: string; at: string; icon: TemplateKey | "client" | "save" };
 type Session = { name: string; role: Role } | null;
@@ -460,36 +475,302 @@ function LetterBlock({ title, children }: { title: string; children: React.React
   return <div className="space-y-5"><h3 className="text-lg font-bold text-navy">{title}</h3><div className="space-y-4 text-sm">{children}</div><div className="pt-8"><p className="font-semibold">Authorized signature</p><div className="mt-8 w-56 border-t border-foreground" /></div></div>;
 }
 
-function DocumentStudio({ doc, clients, onSave, onDuplicate, onReset }: { doc: DocumentDraft; clients: Client[]; onSave: (doc: DocumentDraft, message?: string) => void; onDuplicate: (doc: DocumentDraft) => void; onReset: () => void }) {
+function ImportTransactionsDialog({ open, onOpenChange, onImport }: { open: boolean; onOpenChange: (o: boolean) => void; onImport: (rows: TransactionRow[]) => void }) {
+  const [rawRows, setRawRows] = useState<Record<string, string>[]>([]);
+  const [headers, setHeaders] = useState<string[]>([]);
+  const [map, setMap] = useState<{ date: string; description: string; debit: string; credit: string; reference: string; balance: string }>({ date: "", description: "", debit: "", credit: "", reference: "", balance: "" });
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const reset = () => { setRawRows([]); setHeaders([]); setMap({ date: "", description: "", debit: "", credit: "", reference: "", balance: "" }); };
+
+  const handleFile = async (file: File) => {
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "", raw: false });
+      if (!json.length) { toast.error("No rows found in file"); return; }
+      const hdrs = Object.keys(json[0]);
+      setHeaders(hdrs);
+      setRawRows(json.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, String(v ?? "")]))));
+      const guess = (terms: string[]) => hdrs.find((h) => terms.some((t) => h.toLowerCase().includes(t))) || "";
+      setMap({
+        date: guess(["date"]),
+        description: guess(["desc", "narration", "particular", "details"]),
+        debit: guess(["debit", "withdraw", "out"]),
+        credit: guess(["credit", "deposit", "in"]),
+        reference: guess(["ref", "txn", "transaction id"]),
+        balance: guess(["balance"]),
+      });
+      toast.success(`Loaded ${json.length} rows. Confirm column mapping.`);
+    } catch (err) {
+      toast.error("Could not read file. Use a valid CSV or XLSX.");
+    }
+  };
+
+  const handleImport = () => {
+    if (!map.date || !map.description) { toast.error("Map at least Date and Description columns"); return; }
+    const num = (v: string) => Number((v || "").toString().replace(/[, ]/g, "")) || 0;
+    let running = 0;
+    const balanceProvided = Boolean(map.balance);
+    const rows: TransactionRow[] = rawRows.map((r) => {
+      const debit = num(r[map.debit] || "");
+      const credit = num(r[map.credit] || "");
+      const balance = balanceProvided ? num(r[map.balance] || "") : (running = running + credit - debit);
+      return { id: uid(), date: String(r[map.date] || "").slice(0, 10), description: String(r[map.description] || ""), reference: String(r[map.reference] || ""), debit, credit, balance };
+    });
+    onImport(rows);
+    onOpenChange(false);
+    reset();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) reset(); }}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Import transactions (CSV / XLSX)</DialogTitle>
+          <DialogDescription>Upload a bank export, then map columns to Date, Description, Debit, and Credit.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="rounded-xl border border-dashed border-border p-4 text-center">
+            <Upload className="mx-auto mb-2 h-6 w-6 text-muted-foreground" />
+            <input ref={inputRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])} />
+            <Button variant="hero" onClick={() => inputRef.current?.click()}><Upload className="h-4 w-4" /> Choose file</Button>
+            <p className="mt-2 text-xs text-muted-foreground">Supports .csv, .xlsx, .xls. First sheet is read.</p>
+          </div>
+          {headers.length > 0 && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {(["date", "description", "debit", "credit", "reference", "balance"] as const).map((key) => (
+                <Field key={key} label={`${key[0].toUpperCase()}${key.slice(1)} column${key === "date" || key === "description" ? " *" : ""}`}>
+                  <Select value={map[key] || "__none"} onValueChange={(v) => setMap((m) => ({ ...m, [key]: v === "__none" ? "" : v }))}>
+                    <SelectTrigger><SelectValue placeholder="Select column" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none">— None —</SelectItem>
+                      {headers.map((h) => <SelectItem key={h} value={h}>{h}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </Field>
+              ))}
+            </div>
+          )}
+          {rawRows.length > 0 && <p className="text-xs text-muted-foreground">{rawRows.length} rows ready for import.</p>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="hero" disabled={!rawRows.length} onClick={handleImport}>Import {rawRows.length || ""} rows</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+  const [mode, setMode] = useState<"print" | "pdf">("pdf");
+  const trigger = () => {
+    onOpenChange(false);
+    toast.success(mode === "pdf" ? "Use 'Save as PDF' in the print dialog" : "Print dialog opened");
+    setTimeout(() => window.print(), 150);
+  };
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Export document</DialogTitle>
+          <DialogDescription>A4 print styles are applied automatically. The browser's print dialog is used for PDF export.</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <button onClick={() => setMode("pdf")} className={cn("rounded-xl border p-4 text-left transition", mode === "pdf" ? "border-primary bg-secondary/10" : "border-border")}>
+            <Download className="mb-2 h-5 w-5 text-primary" />
+            <p className="font-semibold">Save as PDF</p>
+            <p className="text-xs text-muted-foreground">Choose 'Save as PDF' as the destination in the print dialog.</p>
+          </button>
+          <button onClick={() => setMode("print")} className={cn("rounded-xl border p-4 text-left transition", mode === "print" ? "border-primary bg-secondary/10" : "border-border")}>
+            <Printer className="mb-2 h-5 w-5 text-primary" />
+            <p className="font-semibold">Print only</p>
+            <p className="text-xs text-muted-foreground">Send directly to a connected A4 printer.</p>
+          </button>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="hero" onClick={trigger}>{mode === "pdf" ? "Open Save as PDF" : "Open print dialog"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function GlobalSearchDialog({ open, onOpenChange, clients, documents, onPickDoc, onPickClient }: { open: boolean; onOpenChange: (o: boolean) => void; clients: Client[]; documents: DocumentDraft[]; onPickDoc: (id: string) => void; onPickClient: (id: string) => void }) {
+  const [q, setQ] = useState("");
+  useEffect(() => { if (!open) setQ(""); }, [open]);
+  const term = q.trim().toLowerCase();
+  const matchedClients = !term ? clients.slice(0, 5) : clients.filter((c) => `${c.name} ${c.passport} ${c.email} ${c.visaCountry} ${c.visaType}`.toLowerCase().includes(term));
+  const matchedDocs = !term ? documents.slice(0, 8) : documents.filter((d) => {
+    const c = clients.find((x) => x.id === d.clientId);
+    return `${d.title} ${templateMeta[d.template].name} ${d.status} ${c?.name || ""} ${c?.passport || ""}`.toLowerCase().includes(term);
+  });
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Search clients & documents</DialogTitle>
+          <DialogDescription>Find any client profile or document draft across all templates.</DialogDescription>
+        </DialogHeader>
+        <div className="relative">
+          <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name, passport, title, status…" className="pl-9" />
+        </div>
+        <div className="max-h-80 space-y-4 overflow-auto">
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Clients ({matchedClients.length})</p>
+            <div className="space-y-1">
+              {matchedClients.map((c) => (
+                <button key={c.id} onClick={() => { onPickClient(c.id); onOpenChange(false); }} className="flex w-full items-center justify-between rounded-lg border border-border p-2 text-left text-sm hover:bg-secondary/10">
+                  <span><b>{c.name}</b> <span className="text-muted-foreground">• {c.passport || "no passport"}</span></span>
+                  <span className="text-xs text-muted-foreground">{c.visaCountry || "—"}</span>
+                </button>
+              ))}
+              {!matchedClients.length && <p className="text-xs text-muted-foreground">No clients matched.</p>}
+            </div>
+          </div>
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Documents ({matchedDocs.length})</p>
+            <div className="space-y-1">
+              {matchedDocs.map((d) => {
+                const c = clients.find((x) => x.id === d.clientId);
+                return (
+                  <button key={d.id} onClick={() => { onPickDoc(d.id); onOpenChange(false); }} className="flex w-full items-center justify-between rounded-lg border border-border p-2 text-left text-sm hover:bg-secondary/10">
+                    <span><b>{d.title}</b> <span className="text-muted-foreground">• {templateMeta[d.template].short}</span></span>
+                    <span className="flex items-center gap-2 text-xs text-muted-foreground">{c?.name || "—"} <Badge className={statusClass[d.status]} variant="outline">{d.status}</Badge></span>
+                  </button>
+                );
+              })}
+              {!matchedDocs.length && <p className="text-xs text-muted-foreground">No documents matched.</p>}
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DocumentStudio({ doc, clients, role, userName, onSave, onDuplicate, onReset }: { doc: DocumentDraft; clients: Client[]; role: Role; userName: string; onSave: (doc: DocumentDraft, message?: string) => void; onDuplicate: (doc: DocumentDraft) => void; onReset: () => void }) {
   const selectedClient = clients.find((c) => c.id === doc.clientId) || clients[0];
+  const [importOpen, setImportOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
+  const allowedStatuses = ROLE_PERMS[role].setStatus;
+  const canVerify = can(role, "verify");
+  const canSubmit = can(role, "submit");
+
   const setField = (key: string, value: string | number | boolean) => onSave({ ...doc, fields: { ...doc.fields, [key]: value }, updatedAt: new Date().toISOString() }, "Draft updated");
-  const setTransactions = (rows: TransactionRow[]) => {
+  const recalcFromRows = (rows: TransactionRow[]) => {
     const totalDebit = rows.reduce((s, r) => s + Number(r.debit || 0), 0);
     const totalCredit = rows.reduce((s, r) => s + Number(r.credit || 0), 0);
     const closingBalance = rows.length ? Number(rows[rows.length - 1].balance || 0) : Number(doc.fields.openingBalance || 0) + totalCredit - totalDebit;
     const averageBalance = rows.length ? Math.round(rows.reduce((s, r) => s + Number(r.balance || 0), 0) / rows.length) : 0;
-    onSave({ ...doc, transactions: rows, fields: { ...doc.fields, totalDebit, totalCredit, closingBalance, averageBalance }, updatedAt: new Date().toISOString() }, "Transactions recalculated");
+    return { totalDebit, totalCredit, closingBalance, averageBalance };
   };
+  const setTransactions = (rows: TransactionRow[], message = "Transactions recalculated") => onSave({ ...doc, transactions: rows, fields: { ...doc.fields, ...recalcFromRows(rows) }, updatedAt: new Date().toISOString() }, message);
   const setPlans = (rows: DayPlan[]) => onSave({ ...doc, dayPlans: rows, updatedAt: new Date().toISOString() }, "Itinerary updated");
+
+  const updateStatus = (next: Status) => {
+    if (!allowedStatuses.includes(next)) { toast.error(`Your role (${role}) cannot set status to ${next}`); return; }
+    if (next === "Submitted" && !canSubmit) { toast.error("Only Admin or Documentation Officer can submit"); return; }
+    if (next === "Verified" && !canVerify) { toast.error("Only Admin or Reviewer can verify"); return; }
+    const verified = next === "Verified" ? true : doc.verified;
+    onSave({ ...doc, status: next, verified, updatedAt: new Date().toISOString() }, `Status: ${next}`);
+  };
+
+  const addNote = () => {
+    const text = noteDraft.trim();
+    if (!text) return;
+    const note: ReviewNote = { id: uid(), author: userName, role, text, at: new Date().toISOString() };
+    onSave({ ...doc, reviewNotes: [note, ...(doc.reviewNotes || [])], updatedAt: new Date().toISOString() }, "Review note added");
+    setNoteDraft("");
+  };
+
   return (
     <section className="grid gap-4 xl:grid-cols-[440px_1fr]">
       <aside className="no-print studio-card h-fit p-4">
-        <div className="mb-4 flex items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Document Workspace</p><h2 className="text-xl font-bold">{templateMeta[doc.template].name}</h2></div><Badge className={statusClass[doc.status]} variant="outline">{doc.status}</Badge></div>
-        <div className="mb-4 grid gap-3 sm:grid-cols-2">
-          <Field label="Client"><Select value={doc.clientId} onValueChange={(v) => onSave({ ...doc, clientId: v, updatedAt: new Date().toISOString() }, "Client linked")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent></Select></Field>
-          <Field label="Status"><Select value={doc.status} onValueChange={(v) => onSave({ ...doc, status: v as Status, updatedAt: new Date().toISOString() }, "Status updated")}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{["Draft", "Review", "Verified", "Ready", "Submitted"].map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select></Field>
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Document Workspace</p>
+            <h2 className="text-xl font-bold">{templateMeta[doc.template].name}</h2>
+          </div>
+          <Badge className={statusClass[doc.status]} variant="outline">{doc.status}</Badge>
         </div>
-        <div className="mb-4 flex flex-wrap gap-3 text-sm"><label className="flex items-center gap-2"><Checkbox checked={doc.watermark} onCheckedChange={(v) => onSave({ ...doc, watermark: Boolean(v) }, "Watermark toggled")} /> SAMPLE / DRAFT watermark</label><label className="flex items-center gap-2"><Checkbox checked={doc.verified} onCheckedChange={(v) => onSave({ ...doc, verified: Boolean(v), status: Boolean(v) ? "Verified" : doc.status }, "Verification status updated")} /> Verified against original?</label></div>
-        <FieldEditor doc={doc} onField={setField} onTransactions={setTransactions} onPlans={setPlans} />
+        <div className="mb-4 grid gap-3 sm:grid-cols-2">
+          <Field label="Client">
+            <Select value={doc.clientId} onValueChange={(v) => onSave({ ...doc, clientId: v, updatedAt: new Date().toISOString() }, "Client linked")}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>{clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}</SelectContent>
+            </Select>
+          </Field>
+          <Field label={`Status (role: ${role})`}>
+            <Select value={doc.status} onValueChange={(v) => updateStatus(v as Status)}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {STATUS_FLOW.map(s => (
+                  <SelectItem key={s} value={s} disabled={!allowedStatuses.includes(s)}>
+                    {s}{!allowedStatuses.includes(s) ? " (restricted)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        </div>
+        <div className="mb-4 flex flex-wrap gap-3 text-sm">
+          <label className={cn("flex items-center gap-2", !canVerify && "opacity-50")}>
+            <Checkbox disabled={!canVerify} checked={doc.watermark} onCheckedChange={(v) => onSave({ ...doc, watermark: Boolean(v) }, "Watermark toggled")} />
+            SAMPLE / DRAFT watermark
+          </label>
+          <label className={cn("flex items-center gap-2", !canVerify && "opacity-50")}>
+            <Checkbox disabled={!canVerify} checked={doc.verified} onCheckedChange={(v) => updateStatus(Boolean(v) ? "Verified" : "Review")} />
+            Verified against original {!canVerify && <Lock className="h-3 w-3" />}
+          </label>
+        </div>
+
+        {doc.template === "financial" && (
+          <div className="mb-3">
+            <Button variant="secondary" className="w-full" onClick={() => setImportOpen(true)}><Upload className="h-4 w-4" /> Import CSV / XLSX</Button>
+          </div>
+        )}
+
+        <FieldEditor doc={doc} onField={setField} onTransactions={(rows) => setTransactions(rows)} onPlans={setPlans} />
+
+        <div className="mt-5 rounded-xl border border-border p-3">
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Review notes</p>
+          <div className="mb-2 flex gap-2">
+            <Input value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} placeholder="Add a review note…" />
+            <Button variant="hero" size="sm" onClick={addNote}><Plus className="h-4 w-4" /></Button>
+          </div>
+          <div className="max-h-40 space-y-2 overflow-auto">
+            {(doc.reviewNotes || []).map((n) => (
+              <div key={n.id} className="rounded-lg bg-surface p-2 text-xs">
+                <p className="font-semibold">{n.author} <span className="text-muted-foreground">• {n.role}</span></p>
+                <p>{n.text}</p>
+                <p className="text-muted-foreground">{new Date(n.at).toLocaleString()}</p>
+              </div>
+            ))}
+            {!(doc.reviewNotes || []).length && <p className="text-xs text-muted-foreground">No notes yet.</p>}
+          </div>
+        </div>
+
         <div className="mt-5 grid grid-cols-2 gap-2">
           <Button variant="hero" onClick={() => onSave({ ...doc, updatedAt: new Date().toISOString() }, "Draft saved")}><Save className="h-4 w-4" /> Save</Button>
           <Button variant="secondary" onClick={() => onDuplicate(doc)}><Copy className="h-4 w-4" /> Duplicate</Button>
           <Button variant="outline" onClick={onReset}><RefreshCcw className="h-4 w-4" /> Reset sample</Button>
-          <Button variant="outline" onClick={() => { toast.success("Print dialog opened"); setTimeout(() => window.print(), 100); }}><Printer className="h-4 w-4" /> Print</Button>
-          <Button variant="warm" className="col-span-2" onClick={() => { toast.success("Export PDF uses browser print / save as PDF"); setTimeout(() => window.print(), 100); }}><Download className="h-4 w-4" /> Export PDF</Button>
+          <Button variant="outline" onClick={() => setExportOpen(true)}><Printer className="h-4 w-4" /> Print / Export</Button>
+          {canSubmit && doc.status !== "Submitted" && (
+            <Button variant="warm" className="col-span-2" onClick={() => updateStatus("Submitted")}><Send className="h-4 w-4" /> Mark as Submitted</Button>
+          )}
         </div>
       </aside>
-      <div className="print-area overflow-auto rounded-xl bg-surface-strong p-3 sm:p-6"><A4Preview doc={doc} client={selectedClient} onField={(k, v) => setField(k, v)} onTransactions={setTransactions} onPlans={setPlans} /></div>
+      <div className="print-area overflow-auto rounded-xl bg-surface-strong p-3 sm:p-6">
+        <A4Preview doc={doc} client={selectedClient} onField={(k, v) => setField(k, v)} onTransactions={(rows) => setTransactions(rows)} onPlans={setPlans} />
+      </div>
+      <ImportTransactionsDialog open={importOpen} onOpenChange={setImportOpen} onImport={(rows) => setTransactions(rows, `Imported ${rows.length} transactions`)} />
+      <ExportDialog open={exportOpen} onOpenChange={setExportOpen} />
     </section>
   );
 }
@@ -510,6 +791,15 @@ export default function Index() {
   const [query, setQuery] = useState("");
   const [country, setCountry] = useState("all");
   const [visaType, setVisaType] = useState("all");
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setGlobalSearchOpen(true); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => localStorage.setItem("visahobe-document-studio", JSON.stringify(store)), [store]);
 
@@ -545,18 +835,19 @@ export default function Index() {
           <header className="no-print sticky top-0 z-20 border-b border-border bg-background/90 px-4 py-3 backdrop-blur lg:px-6">
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div className="flex items-center justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">VisaHOBe PTE. LTD.</p><h1 className="text-xl font-bold">{view === "dashboard" ? "Operations Dashboard" : view === "clients" ? "Client Profile Manager" : view === "documents" ? "Document Workspace" : "Recent Activity"}</h1></div><Menu className="h-5 w-5 text-muted-foreground lg:hidden" /></div>
-              <div className="grid gap-2 sm:grid-cols-[1.5fr_1fr_1fr_auto] xl:w-[760px]"><div className="relative"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search client, passport, or document" className="pl-9" /></div><Select value={country} onValueChange={setCountry}><SelectTrigger><SelectValue placeholder="Country" /></SelectTrigger><SelectContent><SelectItem value="all">All countries</SelectItem>{countries.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select><Select value={visaType} onValueChange={setVisaType}><SelectTrigger><SelectValue placeholder="Visa type" /></SelectTrigger><SelectContent><SelectItem value="all">All visa types</SelectItem>{visaTypes.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)}</SelectContent></Select><Button variant="hero" onClick={() => createNewDoc("financial")}><Plus className="h-4 w-4" /> Draft</Button></div>
+              <div className="grid gap-2 sm:grid-cols-[1.5fr_1fr_1fr_auto_auto] xl:w-[820px]"><button onClick={() => setGlobalSearchOpen(true)} className="relative flex items-center rounded-md border border-input bg-background pl-9 pr-3 text-left text-sm text-muted-foreground hover:bg-secondary/10"><Search className="absolute left-3 top-2.5 h-4 w-4" />Search clients & documents… <kbd className="ml-auto rounded bg-muted px-1.5 py-0.5 text-[10px]">⌘K</kbd></button><Select value={country} onValueChange={setCountry}><SelectTrigger><SelectValue placeholder="Country" /></SelectTrigger><SelectContent><SelectItem value="all">All countries</SelectItem>{countries.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select><Select value={visaType} onValueChange={setVisaType}><SelectTrigger><SelectValue placeholder="Visa type" /></SelectTrigger><SelectContent><SelectItem value="all">All visa types</SelectItem>{visaTypes.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)}</SelectContent></Select><Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter list…" /><Button variant="hero" onClick={() => createNewDoc("financial")}><Plus className="h-4 w-4" /> Draft</Button></div>
             </div>
           </header>
           <div className="p-4 lg:p-6">
             {view === "dashboard" && <div className="space-y-6"><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><CountCard label="Total clients" value={store.clients.length} icon={UserRound} tone="bg-brand-gradient" /><CountCard label="Drafts" value={store.documents.filter(d => d.status === "Draft").length} icon={FileText} tone="bg-secondary" /><CountCard label="Pending documents" value={pendingDocuments} icon={ClipboardList} tone="bg-hot-gradient" /><CountCard label="Completed files" value={completedFiles} icon={ShieldCheck} tone="bg-success" /></div><section className="grid gap-4 xl:grid-cols-[1fr_380px]"><div className="studio-card p-4"><div className="mb-4 flex items-center justify-between"><h2 className="font-bold">Quick actions</h2><Badge variant="outline">{filteredDocs.length} visible drafts</Badge></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{(Object.keys(templateMeta) as TemplateKey[]).map((key) => { const Icon = templateMeta[key].icon; return <button key={key} onClick={() => createNewDoc(key)} className="rounded-xl border border-border bg-card p-4 text-left transition hover:-translate-y-0.5 hover:border-primary hover:shadow-card"><Icon className="mb-3 h-5 w-5 text-primary" /><p className="font-semibold">{templateMeta[key].short}</p><p className="text-xs text-muted-foreground">Create editable draft</p></button>; })}</div></div><div className="studio-card p-4"><h2 className="mb-4 font-bold">Recent activity</h2><div className="space-y-3">{store.activityLogs.slice(0, 6).map((log) => <div key={log.id} className="flex gap-3 rounded-lg bg-surface p-3"><Activity className="h-4 w-4 text-primary" /><div><p className="text-sm font-medium">{log.text}</p><p className="text-xs text-muted-foreground">{new Date(log.at).toLocaleString()}</p></div></div>)}</div></div></section></div>}
-            {view === "clients" && selectedClient && <ClientPanel clients={store.clients} selectedClient={selectedClient} onSelect={setSelectedClientId} onSave={saveClient} />}
-            {view === "documents" && <div className="space-y-4"><div className="no-print studio-card flex flex-col gap-3 p-3 lg:flex-row lg:items-center"><div className="grid flex-1 gap-2 md:grid-cols-3">{filteredDocs.map((doc) => { const Icon = templateMeta[doc.template].icon; return <button key={doc.id} onClick={() => setSelectedDocId(doc.id)} className={cn("rounded-lg border p-3 text-left transition hover:bg-secondary/10", selectedDocId === doc.id ? "border-primary bg-secondary/10" : "border-border")}><div className="flex items-start gap-2"><Icon className="mt-0.5 h-4 w-4 text-primary" /><div className="min-w-0"><p className="truncate text-sm font-semibold">{doc.title}</p><p className="text-xs text-muted-foreground">{templateMeta[doc.template].short} • {doc.status}</p></div></div></button>; })}</div></div>{selectedDoc && <DocumentStudio doc={selectedDoc} clients={store.clients} onSave={saveDoc} onDuplicate={duplicateDoc} onReset={resetDoc} />}</div>}
+            {view === "clients" && selectedClient && (can(store.session.role, "manageClients") ? <ClientPanel clients={store.clients} selectedClient={selectedClient} onSelect={setSelectedClientId} onSave={saveClient} /> : <div className="studio-card p-6 text-sm"><Lock className="mb-2 h-5 w-5 text-muted-foreground" /><p className="font-semibold">Client management is restricted</p><p className="text-muted-foreground">Your role ({store.session.role}) can review documents but cannot edit client profiles.</p></div>)}
+            {view === "documents" && <div className="space-y-4"><div className="no-print studio-card flex flex-col gap-3 p-3 lg:flex-row lg:items-center"><div className="grid flex-1 gap-2 md:grid-cols-3">{filteredDocs.map((doc) => { const Icon = templateMeta[doc.template].icon; return <button key={doc.id} onClick={() => setSelectedDocId(doc.id)} className={cn("rounded-lg border p-3 text-left transition hover:bg-secondary/10", selectedDocId === doc.id ? "border-primary bg-secondary/10" : "border-border")}><div className="flex items-start gap-2"><Icon className="mt-0.5 h-4 w-4 text-primary" /><div className="min-w-0"><p className="truncate text-sm font-semibold">{doc.title}</p><p className="text-xs text-muted-foreground">{templateMeta[doc.template].short} • {doc.status}</p></div></div></button>; })}</div></div>{selectedDoc && <DocumentStudio doc={selectedDoc} clients={store.clients} role={store.session.role} userName={store.session.name} onSave={saveDoc} onDuplicate={duplicateDoc} onReset={resetDoc} />}</div>}
             {view === "activity" && <div className="studio-card p-4"><h2 className="mb-4 text-xl font-bold">Activity Logs</h2><div className="space-y-3">{store.activityLogs.map((log) => <div key={log.id} className="flex items-center justify-between rounded-xl border border-border p-4"><div className="flex items-center gap-3"><CalendarDays className="h-5 w-5 text-primary" /><div><p className="font-medium">{log.text}</p><p className="text-sm text-muted-foreground">{new Date(log.at).toLocaleString()}</p></div></div><Badge variant="outline">Internal</Badge></div>)}</div></div>}
           </div>
         </section>
       </div>
       <nav className="no-print fixed bottom-0 left-0 right-0 z-30 grid grid-cols-4 border-t border-border bg-card p-2 shadow-card lg:hidden">{navItems.map((item) => <button key={item.id} onClick={() => setView(item.id)} className={cn("flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-xs text-muted-foreground", view === item.id && "bg-secondary/10 text-primary")}><item.icon className="h-5 w-5" />{item.label}</button>)}</nav>
+      <GlobalSearchDialog open={globalSearchOpen} onOpenChange={setGlobalSearchOpen} clients={store.clients} documents={store.documents} onPickDoc={(id) => { setSelectedDocId(id); setView("documents"); }} onPickClient={(id) => { setSelectedClientId(id); setView("clients"); }} />
     </main>
   );
 }
