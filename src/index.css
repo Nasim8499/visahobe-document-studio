@@ -137,22 +137,23 @@ All colors MUST be HSL.
   }
 }
 
+@media (max-width: 640px) {
+  .a4-page {
+    min-height: auto;
+    aspect-ratio: auto;
+    padding: 1rem !important;
+  }
+  .a4-page footer {
+    position: static !important;
+    margin-top: 1.5rem;
+  }
+}
+
 @media print {
-  body {
-    background: hsl(0 0% 100%) !important;
-  }
-
-  .no-print {
-    display: none !important;
-  }
-
-  .print-area {
-    display: block !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    background: hsl(0 0% 100%) !important;
-  }
-
+  body * { visibility: hidden !important; }
+  .print-area, .print-area * { visibility: visible !important; }
+  .print-area { position: absolute; inset: 0; padding: 0 !important; margin: 0 !important; background: hsl(0 0% 100%) !important; }
+  .no-print { display: none !important; }
   .a4-page {
     width: 210mm !important;
     min-height: 297mm !important;
