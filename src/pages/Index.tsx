@@ -791,6 +791,15 @@ export default function Index() {
   const [query, setQuery] = useState("");
   const [country, setCountry] = useState("all");
   const [visaType, setVisaType] = useState("all");
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setGlobalSearchOpen(true); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => localStorage.setItem("visahobe-document-studio", JSON.stringify(store)), [store]);
 
