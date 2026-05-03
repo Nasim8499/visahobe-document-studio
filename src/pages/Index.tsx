@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import {
   Activity,
   BadgeCheck,
@@ -12,6 +13,7 @@ import {
   FileText,
   Hotel,
   LayoutDashboard,
+  Lock,
   LogIn,
   LogOut,
   Mail,
@@ -23,8 +25,10 @@ import {
   RefreshCcw,
   Save,
   Search,
+  Send,
   ShieldCheck,
   Trash2,
+  Upload,
   UserRound,
   WalletCards,
 } from "lucide-react";
@@ -33,11 +37,20 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+
+// Role-based access control
+const ROLE_PERMS: Record<Role, { verify: boolean; submit: boolean; setStatus: Status[]; manageClients: boolean }> = {
+  Admin: { verify: true, submit: true, setStatus: ["Draft", "Review", "Verified", "Ready", "Submitted"], manageClients: true },
+  "Documentation Officer": { verify: false, submit: true, setStatus: ["Draft", "Review", "Ready", "Submitted"], manageClients: true },
+  Reviewer: { verify: true, submit: false, setStatus: ["Review", "Verified", "Ready"], manageClients: false },
+};
+const can = (role: Role | undefined, action: "verify" | "submit" | "manageClients") => !!role && ROLE_PERMS[role][action];
 
 type Role = "Admin" | "Documentation Officer" | "Reviewer";
 type Status = "Draft" | "Review" | "Verified" | "Ready" | "Submitted";
