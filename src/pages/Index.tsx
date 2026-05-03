@@ -731,6 +731,7 @@ function DocumentStudio({ doc, clients, role, userName, onSave, onDuplicate, onR
     if (next === "Verified" && !canVerify) { toast.error("Only Admin or Reviewer can verify"); return; }
     const verified = next === "Verified" ? true : doc.verified;
     onSave({ ...doc, status: next, verified, updatedAt: new Date().toISOString() }, `Status: ${next}`);
+    onLog(`${userName} (${role}) set "${doc.title}" → ${next}`, "status");
   };
 
   const addNote = () => {
@@ -738,6 +739,7 @@ function DocumentStudio({ doc, clients, role, userName, onSave, onDuplicate, onR
     if (!text) return;
     const note: ReviewNote = { id: uid(), author: userName, role, text, at: new Date().toISOString() };
     onSave({ ...doc, reviewNotes: [note, ...(doc.reviewNotes || [])], updatedAt: new Date().toISOString() }, "Review note added");
+    onLog(`${userName} (${role}) added note on "${doc.title}": ${text.slice(0, 80)}`, "note");
     setNoteDraft("");
   };
 
