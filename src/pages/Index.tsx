@@ -87,7 +87,7 @@ type DocumentDraft = {
   dayPlans?: DayPlan[];
   reviewNotes?: ReviewNote[];
 };
-type ActivityLog = { id: string; text: string; at: string; icon: TemplateKey | "client" | "save" };
+type ActivityLog = { id: string; text: string; at: string; icon: TemplateKey | "client" | "save" | "status" | "note" | "import" | "export"; actor?: string; role?: Role };
 type Session = { name: string; role: Role } | null;
 
 type Store = {
@@ -449,7 +449,7 @@ function A4Preview({ doc, client, onField, onTransactions, onPlans }: { doc: Doc
   const f = doc.fields;
   const currency = String(f.currency || "SGD");
   const edit = (key: string, className?: string) => <Editable value={f[key]} onChange={(v) => onField(key, v)} className={className} />;
-  const header = <><div className="flex items-start justify-between border-b border-border pb-5"><div><p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary">VisaHOBe PTE. LTD.</p><h2 className="mt-2 text-2xl font-bold text-navy">{templateMeta[doc.template].name}</h2></div><Badge className={statusClass[doc.status]} variant="outline">{doc.verified ? "Verified" : doc.status}</Badge></div>{doc.watermark && <div className="pointer-events-none absolute inset-0 flex rotate-[-28deg] items-center justify-center text-6xl font-bold uppercase tracking-widest text-muted/80">Sample / Draft</div>}</>;
+  const header = <><div className="flex items-start justify-between border-b border-border pb-5"><div><p className="text-xs font-semibold uppercase tracking-[0.28em] text-primary">VisaHOBe PTE. LTD.</p><h2 className="mt-2 text-2xl font-bold text-navy">{templateMeta[doc.template].name}</h2></div><Badge className={statusClass[doc.status]} variant="outline">{doc.verified ? "Verified" : doc.status}</Badge></div>{doc.watermark && <div aria-hidden className="pointer-events-none absolute inset-0 z-10 flex rotate-[-28deg] items-center justify-center text-7xl font-extrabold uppercase tracking-widest text-muted-foreground/15 print:text-foreground/10">SAMPLE / DRAFT</div>}</>;
   return (
     <article className="a4-page mx-auto overflow-hidden p-8 font-body text-sm leading-relaxed">
       {header}
@@ -466,7 +466,7 @@ function A4Preview({ doc, client, onField, onTransactions, onPlans }: { doc: Doc
         {doc.template === "accommodation" && <LetterBlock title="Accommodation Summary"><p>Applicant {edit("applicantName")} has accommodation details recorded as follows for internal file preparation.</p><div className="grid grid-cols-2 gap-3 rounded-xl border p-4"><p>Hotel/Host: {edit("hotelName")}</p><p>Reference: {edit("bookingReference")}</p><p>Check-in: {edit("checkIn")}</p><p>Check-out: {edit("checkOut")}</p><p>Contact: {edit("contact")}</p><p>Address: {edit("address")}</p></div><p>{edit("notes")}</p></LetterBlock>}
         {doc.template === "cover" && <LetterBlock title="Visa Explanation Letter"><p>To: {edit("embassy")}</p><p>Applicant: {edit("applicantName")}<br />Visa type: {edit("visaType")}<br />Travel dates: {edit("travelDates")}</p><p>{edit("paragraphs", "min-w-full")}</p><p>Purpose: {edit("purpose")}. Funding: {edit("funding")}.</p><p>{edit("background", "min-w-full")}</p><p>{edit("closing", "min-w-full")}</p></LetterBlock>}
       </div>
-      <footer className="absolute bottom-8 left-8 right-8 flex justify-between border-t border-border pt-3 text-[10px] text-muted-foreground"><span>Client file: {client?.name || "Unassigned"}</span><span>Draft prepared in VisaHOBe Document Studio</span></footer>
+      <footer className="absolute bottom-6 left-8 right-8 space-y-2 border-t border-border pt-3 text-[10px] text-muted-foreground"><p className="font-semibold text-foreground">Prepared for internal visa file review. Verify against original documents before submission. This is not an official bank or government document.</p><div className="flex justify-between"><span>Client file: {client?.name || "Unassigned"}</span><span>Draft prepared in VisaHOBe Document Studio • {new Date(doc.updatedAt).toLocaleString()}</span></div></footer>
     </article>
   );
 }
@@ -475,13 +475,41 @@ function LetterBlock({ title, children }: { title: string; children: React.React
   return <div className="space-y-5"><h3 className="text-lg font-bold text-navy">{title}</h3><div className="space-y-4 text-sm">{children}</div><div className="pt-8"><p className="font-semibold">Authorized signature</p><div className="mt-8 w-56 border-t border-foreground" /></div></div>;
 }
 
-function ImportTransactionsDialog({ open, onOpenChange, onImport }: { open: boolean; onOpenChange: (o: boolean) => void; onImport: (rows: TransactionRow[]) => void }) {
+type ImportValidation = { rowIndex: number; field: string; message: string };
+
+function validateTransactions(rows: TransactionRow[], openingBalance: number): { errors: ImportValidation[]; computed: { totalDebit: number; totalCredit: number } } {
+  const errors: ImportValidation[] = [];
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  let running = openingBalance;
+  let totalDebit = 0;
+  let totalCredit = 0;
+  rows.forEach((r, i) => {
+    if (!r.date || !dateRe.test(r.date)) errors.push({ rowIndex: i, field: "date", message: "Date must be YYYY-MM-DD" });
+    if (!r.description?.trim()) errors.push({ rowIndex: i, field: "description", message: "Description is required" });
+    if (Number.isNaN(Number(r.debit)) || Number(r.debit) < 0) errors.push({ rowIndex: i, field: "debit", message: "Debit must be ≥ 0" });
+    if (Number.isNaN(Number(r.credit)) || Number(r.credit) < 0) errors.push({ rowIndex: i, field: "credit", message: "Credit must be ≥ 0" });
+    if (Number(r.debit) > 0 && Number(r.credit) > 0) errors.push({ rowIndex: i, field: "credit", message: "Row cannot have both debit and credit" });
+    totalDebit += Number(r.debit || 0);
+    totalCredit += Number(r.credit || 0);
+    running = running + Number(r.credit || 0) - Number(r.debit || 0);
+    if (r.balance !== undefined && r.balance !== null && !Number.isNaN(Number(r.balance))) {
+      if (Math.abs(Number(r.balance) - running) > 0.01) {
+        errors.push({ rowIndex: i, field: "balance", message: `Running balance mismatch (expected ${running.toFixed(2)})` });
+      }
+    }
+  });
+  return { errors, computed: { totalDebit, totalCredit } };
+}
+
+function ImportTransactionsDialog({ open, onOpenChange, openingBalance, onImport }: { open: boolean; onOpenChange: (o: boolean) => void; openingBalance: number; onImport: (rows: TransactionRow[]) => void }) {
   const [rawRows, setRawRows] = useState<Record<string, string>[]>([]);
   const [headers, setHeaders] = useState<string[]>([]);
   const [map, setMap] = useState<{ date: string; description: string; debit: string; credit: string; reference: string; balance: string }>({ date: "", description: "", debit: "", credit: "", reference: "", balance: "" });
+  const [errors, setErrors] = useState<ImportValidation[]>([]);
+  const [preview, setPreview] = useState<TransactionRow[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const reset = () => { setRawRows([]); setHeaders([]); setMap({ date: "", description: "", debit: "", credit: "", reference: "", balance: "" }); };
+  const reset = () => { setRawRows([]); setHeaders([]); setErrors([]); setPreview([]); setMap({ date: "", description: "", debit: "", credit: "", reference: "", balance: "" }); };
 
   const handleFile = async (file: File) => {
     try {
@@ -508,28 +536,42 @@ function ImportTransactionsDialog({ open, onOpenChange, onImport }: { open: bool
     }
   };
 
-  const handleImport = () => {
-    if (!map.date || !map.description) { toast.error("Map at least Date and Description columns"); return; }
+  const buildRows = (): TransactionRow[] => {
     const num = (v: string) => Number((v || "").toString().replace(/[, ]/g, "")) || 0;
-    let running = 0;
-    const balanceProvided = Boolean(map.balance);
-    const rows: TransactionRow[] = rawRows.map((r) => {
+    return rawRows.map((r) => {
       const debit = num(r[map.debit] || "");
       const credit = num(r[map.credit] || "");
-      const balance = balanceProvided ? num(r[map.balance] || "") : (running = running + credit - debit);
-      return { id: uid(), date: String(r[map.date] || "").slice(0, 10), description: String(r[map.description] || ""), reference: String(r[map.reference] || ""), debit, credit, balance };
+      const balance = map.balance ? num(r[map.balance] || "") : NaN;
+      const rawDate = String(r[map.date] || "").trim();
+      const isoMatch = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      const dmYMatch = rawDate.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+      const date = isoMatch ? `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}` : dmYMatch ? `${dmYMatch[3]}-${dmYMatch[2].padStart(2, "0")}-${dmYMatch[1].padStart(2, "0")}` : rawDate.slice(0, 10);
+      return { id: uid(), date, description: String(r[map.description] || ""), reference: String(r[map.reference] || ""), debit, credit, balance: Number.isNaN(balance) ? 0 : balance };
     });
-    onImport(rows);
+  };
+
+  const validate = () => {
+    if (!map.date || !map.description) { toast.error("Map at least Date and Description columns"); return; }
+    const rows = buildRows();
+    const { errors: errs } = validateTransactions(rows, Number(openingBalance) || 0);
+    setPreview(rows); setErrors(errs);
+    if (errs.length) toast.error(`${errs.length} validation issue(s) found`); else toast.success("Validation passed — ready to import");
+  };
+
+  const handleImport = () => {
+    if (!preview.length) { validate(); return; }
+    if (errors.length) { toast.error("Fix validation errors before importing"); return; }
+    onImport(preview);
     onOpenChange(false);
     reset();
   };
 
   return (
     <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) reset(); }}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Import transactions (CSV / XLSX)</DialogTitle>
-          <DialogDescription>Upload a bank export, then map columns to Date, Description, Debit, and Credit.</DialogDescription>
+          <DialogDescription>Upload a bank export, then map columns. Validation runs before saving.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <div className="rounded-xl border border-dashed border-border p-4 text-center">
@@ -553,21 +595,32 @@ function ImportTransactionsDialog({ open, onOpenChange, onImport }: { open: bool
               ))}
             </div>
           )}
-          {rawRows.length > 0 && <p className="text-xs text-muted-foreground">{rawRows.length} rows ready for import.</p>}
+          {rawRows.length > 0 && <div className="flex items-center justify-between text-xs text-muted-foreground"><span>{rawRows.length} rows ready.</span><Button size="sm" variant="outline" onClick={validate}>Validate rows</Button></div>}
+          {errors.length > 0 && (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+              <p className="mb-2 text-xs font-semibold text-destructive">{errors.length} validation issue(s):</p>
+              <ul className="max-h-40 space-y-1 overflow-auto text-xs text-destructive">
+                {errors.slice(0, 25).map((e, i) => <li key={i}>Row {e.rowIndex + 1} • <b>{e.field}</b>: {e.message}</li>)}
+                {errors.length > 25 && <li>…and {errors.length - 25} more</li>}
+              </ul>
+            </div>
+          )}
+          {preview.length > 0 && !errors.length && <p className="rounded-lg border border-success/30 bg-success/5 p-2 text-xs text-success">All {preview.length} rows passed validation.</p>}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button variant="hero" disabled={!rawRows.length} onClick={handleImport}>Import {rawRows.length || ""} rows</Button>
+          <Button variant="hero" disabled={!rawRows.length || (preview.length > 0 && errors.length > 0)} onClick={handleImport}>{preview.length ? "Import" : "Validate & continue"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+function ExportDialog({ open, onOpenChange, onConfirm }: { open: boolean; onOpenChange: (o: boolean) => void; onConfirm?: (mode: "print" | "pdf") => void }) {
   const [mode, setMode] = useState<"print" | "pdf">("pdf");
   const trigger = () => {
     onOpenChange(false);
+    onConfirm?.(mode);
     toast.success(mode === "pdf" ? "Use 'Save as PDF' in the print dialog" : "Print dialog opened");
     setTimeout(() => window.print(), 150);
   };
@@ -653,7 +706,7 @@ function GlobalSearchDialog({ open, onOpenChange, clients, documents, onPickDoc,
   );
 }
 
-function DocumentStudio({ doc, clients, role, userName, onSave, onDuplicate, onReset }: { doc: DocumentDraft; clients: Client[]; role: Role; userName: string; onSave: (doc: DocumentDraft, message?: string) => void; onDuplicate: (doc: DocumentDraft) => void; onReset: () => void }) {
+function DocumentStudio({ doc, clients, role, userName, onSave, onDuplicate, onReset, onLog }: { doc: DocumentDraft; clients: Client[]; role: Role; userName: string; onSave: (doc: DocumentDraft, message?: string) => void; onDuplicate: (doc: DocumentDraft) => void; onReset: () => void; onLog: (text: string, icon: ActivityLog["icon"]) => void }) {
   const selectedClient = clients.find((c) => c.id === doc.clientId) || clients[0];
   const [importOpen, setImportOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -679,6 +732,7 @@ function DocumentStudio({ doc, clients, role, userName, onSave, onDuplicate, onR
     if (next === "Verified" && !canVerify) { toast.error("Only Admin or Reviewer can verify"); return; }
     const verified = next === "Verified" ? true : doc.verified;
     onSave({ ...doc, status: next, verified, updatedAt: new Date().toISOString() }, `Status: ${next}`);
+    onLog(`${userName} (${role}) set "${doc.title}" → ${next}`, "status");
   };
 
   const addNote = () => {
@@ -686,6 +740,7 @@ function DocumentStudio({ doc, clients, role, userName, onSave, onDuplicate, onR
     if (!text) return;
     const note: ReviewNote = { id: uid(), author: userName, role, text, at: new Date().toISOString() };
     onSave({ ...doc, reviewNotes: [note, ...(doc.reviewNotes || [])], updatedAt: new Date().toISOString() }, "Review note added");
+    onLog(`${userName} (${role}) added note on "${doc.title}": ${text.slice(0, 80)}`, "note");
     setNoteDraft("");
   };
 
@@ -769,8 +824,8 @@ function DocumentStudio({ doc, clients, role, userName, onSave, onDuplicate, onR
       <div className="print-area overflow-auto rounded-xl bg-surface-strong p-3 sm:p-6">
         <A4Preview doc={doc} client={selectedClient} onField={(k, v) => setField(k, v)} onTransactions={(rows) => setTransactions(rows)} onPlans={setPlans} />
       </div>
-      <ImportTransactionsDialog open={importOpen} onOpenChange={setImportOpen} onImport={(rows) => setTransactions(rows, `Imported ${rows.length} transactions`)} />
-      <ExportDialog open={exportOpen} onOpenChange={setExportOpen} />
+      <ImportTransactionsDialog open={importOpen} onOpenChange={setImportOpen} openingBalance={Number(doc.fields.openingBalance) || 0} onImport={(rows) => { setTransactions(rows, `Imported ${rows.length} transactions`); onLog(`${userName} (${role}) imported ${rows.length} transactions into "${doc.title}"`, "import"); }} />
+      <ExportDialog open={exportOpen} onOpenChange={setExportOpen} onConfirm={(mode) => onLog(`${userName} (${role}) ${mode === "pdf" ? "exported PDF" : "printed"} "${doc.title}"`, "export")} />
     </section>
   );
 }
@@ -803,7 +858,7 @@ export default function Index() {
 
   useEffect(() => localStorage.setItem("visahobe-document-studio", JSON.stringify(store)), [store]);
 
-  const addLog = (text: string, icon: ActivityLog["icon"] = "save") => setStore((prev) => ({ ...prev, activityLogs: [{ id: uid(), text, at: new Date().toISOString(), icon }, ...prev.activityLogs].slice(0, 20) }));
+  const addLog = (text: string, icon: ActivityLog["icon"] = "save") => setStore((prev) => ({ ...prev, activityLogs: [{ id: uid(), text, at: new Date().toISOString(), icon, actor: prev.session?.name, role: prev.session?.role }, ...prev.activityLogs].slice(0, 200) }));
   const login = (session: NonNullable<Session>) => { setStore((prev) => ({ ...prev, session })); toast.success(`Welcome, ${session.role}`); };
   if (!store.session) return <LoginScreen onLogin={login} />;
 
@@ -835,14 +890,14 @@ export default function Index() {
           <header className="no-print sticky top-0 z-20 border-b border-border bg-background/90 px-4 py-3 backdrop-blur lg:px-6">
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
               <div className="flex items-center justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">VisaHOBe PTE. LTD.</p><h1 className="text-xl font-bold">{view === "dashboard" ? "Operations Dashboard" : view === "clients" ? "Client Profile Manager" : view === "documents" ? "Document Workspace" : "Recent Activity"}</h1></div><Menu className="h-5 w-5 text-muted-foreground lg:hidden" /></div>
-              <div className="grid gap-2 sm:grid-cols-[1.5fr_1fr_1fr_auto_auto] xl:w-[820px]"><button onClick={() => setGlobalSearchOpen(true)} className="relative flex items-center rounded-md border border-input bg-background pl-9 pr-3 text-left text-sm text-muted-foreground hover:bg-secondary/10"><Search className="absolute left-3 top-2.5 h-4 w-4" />Search clients & documents… <kbd className="ml-auto rounded bg-muted px-1.5 py-0.5 text-[10px]">⌘K</kbd></button><Select value={country} onValueChange={setCountry}><SelectTrigger><SelectValue placeholder="Country" /></SelectTrigger><SelectContent><SelectItem value="all">All countries</SelectItem>{countries.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select><Select value={visaType} onValueChange={setVisaType}><SelectTrigger><SelectValue placeholder="Visa type" /></SelectTrigger><SelectContent><SelectItem value="all">All visa types</SelectItem>{visaTypes.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)}</SelectContent></Select><Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter list…" /><Button variant="hero" onClick={() => createNewDoc("financial")}><Plus className="h-4 w-4" /> Draft</Button></div>
+              <div className="grid gap-2 grid-cols-1 sm:grid-cols-2 xl:grid-cols-[1.5fr_1fr_1fr_auto_auto] xl:w-[820px]"><button onClick={() => setGlobalSearchOpen(true)} className="relative col-span-full flex items-center rounded-md border border-input bg-background py-2 pl-9 pr-3 text-left text-sm text-muted-foreground hover:bg-secondary/10 xl:col-span-1"><Search className="absolute left-3 top-2.5 h-4 w-4" />Search clients & documents… <kbd className="ml-auto rounded bg-muted px-1.5 py-0.5 text-[10px]">⌘K</kbd></button><Select value={country} onValueChange={setCountry}><SelectTrigger><SelectValue placeholder="Country" /></SelectTrigger><SelectContent><SelectItem value="all">All countries</SelectItem>{countries.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select><Select value={visaType} onValueChange={setVisaType}><SelectTrigger><SelectValue placeholder="Visa type" /></SelectTrigger><SelectContent><SelectItem value="all">All visa types</SelectItem>{visaTypes.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)}</SelectContent></Select><Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter list…" /><Button variant="hero" onClick={() => createNewDoc("financial")}><Plus className="h-4 w-4" /> Draft</Button></div>
             </div>
           </header>
           <div className="p-4 lg:p-6">
             {view === "dashboard" && <div className="space-y-6"><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><CountCard label="Total clients" value={store.clients.length} icon={UserRound} tone="bg-brand-gradient" /><CountCard label="Drafts" value={store.documents.filter(d => d.status === "Draft").length} icon={FileText} tone="bg-secondary" /><CountCard label="Pending documents" value={pendingDocuments} icon={ClipboardList} tone="bg-hot-gradient" /><CountCard label="Completed files" value={completedFiles} icon={ShieldCheck} tone="bg-success" /></div><section className="grid gap-4 xl:grid-cols-[1fr_380px]"><div className="studio-card p-4"><div className="mb-4 flex items-center justify-between"><h2 className="font-bold">Quick actions</h2><Badge variant="outline">{filteredDocs.length} visible drafts</Badge></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{(Object.keys(templateMeta) as TemplateKey[]).map((key) => { const Icon = templateMeta[key].icon; return <button key={key} onClick={() => createNewDoc(key)} className="rounded-xl border border-border bg-card p-4 text-left transition hover:-translate-y-0.5 hover:border-primary hover:shadow-card"><Icon className="mb-3 h-5 w-5 text-primary" /><p className="font-semibold">{templateMeta[key].short}</p><p className="text-xs text-muted-foreground">Create editable draft</p></button>; })}</div></div><div className="studio-card p-4"><h2 className="mb-4 font-bold">Recent activity</h2><div className="space-y-3">{store.activityLogs.slice(0, 6).map((log) => <div key={log.id} className="flex gap-3 rounded-lg bg-surface p-3"><Activity className="h-4 w-4 text-primary" /><div><p className="text-sm font-medium">{log.text}</p><p className="text-xs text-muted-foreground">{new Date(log.at).toLocaleString()}</p></div></div>)}</div></div></section></div>}
             {view === "clients" && selectedClient && (can(store.session.role, "manageClients") ? <ClientPanel clients={store.clients} selectedClient={selectedClient} onSelect={setSelectedClientId} onSave={saveClient} /> : <div className="studio-card p-6 text-sm"><Lock className="mb-2 h-5 w-5 text-muted-foreground" /><p className="font-semibold">Client management is restricted</p><p className="text-muted-foreground">Your role ({store.session.role}) can review documents but cannot edit client profiles.</p></div>)}
-            {view === "documents" && <div className="space-y-4"><div className="no-print studio-card flex flex-col gap-3 p-3 lg:flex-row lg:items-center"><div className="grid flex-1 gap-2 md:grid-cols-3">{filteredDocs.map((doc) => { const Icon = templateMeta[doc.template].icon; return <button key={doc.id} onClick={() => setSelectedDocId(doc.id)} className={cn("rounded-lg border p-3 text-left transition hover:bg-secondary/10", selectedDocId === doc.id ? "border-primary bg-secondary/10" : "border-border")}><div className="flex items-start gap-2"><Icon className="mt-0.5 h-4 w-4 text-primary" /><div className="min-w-0"><p className="truncate text-sm font-semibold">{doc.title}</p><p className="text-xs text-muted-foreground">{templateMeta[doc.template].short} • {doc.status}</p></div></div></button>; })}</div></div>{selectedDoc && <DocumentStudio doc={selectedDoc} clients={store.clients} role={store.session.role} userName={store.session.name} onSave={saveDoc} onDuplicate={duplicateDoc} onReset={resetDoc} />}</div>}
-            {view === "activity" && <div className="studio-card p-4"><h2 className="mb-4 text-xl font-bold">Activity Logs</h2><div className="space-y-3">{store.activityLogs.map((log) => <div key={log.id} className="flex items-center justify-between rounded-xl border border-border p-4"><div className="flex items-center gap-3"><CalendarDays className="h-5 w-5 text-primary" /><div><p className="font-medium">{log.text}</p><p className="text-sm text-muted-foreground">{new Date(log.at).toLocaleString()}</p></div></div><Badge variant="outline">Internal</Badge></div>)}</div></div>}
+            {view === "documents" && <div className="space-y-4"><div className="no-print studio-card flex flex-col gap-3 p-3 lg:flex-row lg:items-center"><div className="grid flex-1 gap-2 md:grid-cols-3">{filteredDocs.map((doc) => { const Icon = templateMeta[doc.template].icon; return <button key={doc.id} onClick={() => setSelectedDocId(doc.id)} className={cn("rounded-lg border p-3 text-left transition hover:bg-secondary/10", selectedDocId === doc.id ? "border-primary bg-secondary/10" : "border-border")}><div className="flex items-start gap-2"><Icon className="mt-0.5 h-4 w-4 text-primary" /><div className="min-w-0"><p className="truncate text-sm font-semibold">{doc.title}</p><p className="text-xs text-muted-foreground">{templateMeta[doc.template].short} • {doc.status}</p></div></div></button>; })}</div></div>{selectedDoc && <DocumentStudio doc={selectedDoc} clients={store.clients} role={store.session.role} userName={store.session.name} onSave={saveDoc} onDuplicate={duplicateDoc} onReset={resetDoc} onLog={addLog} />}</div>}
+            {view === "activity" && <div className="studio-card p-4"><div className="mb-4 flex items-center justify-between"><h2 className="text-xl font-bold">Audit Log</h2><Badge variant="outline">{store.activityLogs.length} entries</Badge></div><div className="space-y-2">{store.activityLogs.map((log) => <div key={log.id} className="flex flex-col gap-2 rounded-xl border border-border p-3 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-start gap-3"><CalendarDays className="mt-0.5 h-4 w-4 shrink-0 text-primary" /><div className="min-w-0"><p className="text-sm font-medium break-words">{log.text}</p><p className="text-xs text-muted-foreground">{new Date(log.at).toLocaleString()}{log.actor ? ` • ${log.actor}${log.role ? ` (${log.role})` : ""}` : ""}</p></div></div><Badge variant="outline" className="self-start sm:self-auto">{log.icon}</Badge></div>)}{!store.activityLogs.length && <p className="text-sm text-muted-foreground">No activity yet.</p>}</div></div>}
           </div>
         </section>
       </div>
