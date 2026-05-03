@@ -847,6 +847,7 @@ export default function Index() {
         </section>
       </div>
       <nav className="no-print fixed bottom-0 left-0 right-0 z-30 grid grid-cols-4 border-t border-border bg-card p-2 shadow-card lg:hidden">{navItems.map((item) => <button key={item.id} onClick={() => setView(item.id)} className={cn("flex flex-col items-center gap-1 rounded-lg px-2 py-2 text-xs text-muted-foreground", view === item.id && "bg-secondary/10 text-primary")}><item.icon className="h-5 w-5" />{item.label}</button>)}</nav>
+      <GlobalSearchDialog open={globalSearchOpen} onOpenChange={setGlobalSearchOpen} clients={store.clients} documents={store.documents} onPickDoc={(id) => { setSelectedDocId(id); setView("documents"); }} onPickClient={(id) => { setSelectedClientId(id); setView("clients"); }} />
     </main>
   );
 }
