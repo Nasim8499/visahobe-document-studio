@@ -44,17 +44,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-// Role-based access control
+type Role = "Admin" | "Documentation Officer" | "Reviewer";
+type Status = "Draft" | "Review" | "Verified" | "Ready" | "Submitted";
+type TemplateKey = "financial" | "employment" | "salary" | "itinerary" | "accommodation" | "cover";
+
 const ROLE_PERMS: Record<Role, { verify: boolean; submit: boolean; setStatus: Status[]; manageClients: boolean }> = {
   Admin: { verify: true, submit: true, setStatus: ["Draft", "Review", "Verified", "Ready", "Submitted"], manageClients: true },
   "Documentation Officer": { verify: false, submit: true, setStatus: ["Draft", "Review", "Ready", "Submitted"], manageClients: true },
   Reviewer: { verify: true, submit: false, setStatus: ["Review", "Verified", "Ready"], manageClients: false },
 };
 const can = (role: Role | undefined, action: "verify" | "submit" | "manageClients") => !!role && ROLE_PERMS[role][action];
-
-type Role = "Admin" | "Documentation Officer" | "Reviewer";
-type Status = "Draft" | "Review" | "Verified" | "Ready" | "Submitted";
-type TemplateKey = "financial" | "employment" | "salary" | "itinerary" | "accommodation" | "cover";
+const STATUS_FLOW: Status[] = ["Draft", "Review", "Verified", "Ready", "Submitted"];
 
 type Client = {
   id: string;
