@@ -616,10 +616,11 @@ function ImportTransactionsDialog({ open, onOpenChange, openingBalance, onImport
   );
 }
 
-function ExportDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+function ExportDialog({ open, onOpenChange, onConfirm }: { open: boolean; onOpenChange: (o: boolean) => void; onConfirm?: (mode: "print" | "pdf") => void }) {
   const [mode, setMode] = useState<"print" | "pdf">("pdf");
   const trigger = () => {
     onOpenChange(false);
+    onConfirm?.(mode);
     toast.success(mode === "pdf" ? "Use 'Save as PDF' in the print dialog" : "Print dialog opened");
     setTimeout(() => window.print(), 150);
   };
